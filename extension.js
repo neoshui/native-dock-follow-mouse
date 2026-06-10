@@ -180,11 +180,17 @@ class NativeDashWrapper {
                 dash._showAppsIcon.icon.setIconSize(size);
         };
 
-        // Intercept _adjustIconSize: completely suppress native auto-sizing,
-        // which would override our configured icon size on every redisplay.
-        // The essential side effect (ensure_style on first icon) is handled
-        // manually inside our _redisplay wrapper instead.
-        dash._adjustIconSize = () => {};
+        // Intercept _adjustIconSize: let the original run for its side effects
+        // (ensure_style, theme spacing hints needed by vertical layout), then
+        // reapply our icon size and resize all icons so the native auto-sizing
+        // never overrides our configured size.
+        dash._adjustIconSize = () => {
+            _origAdjustIconSize();
+            const size = self._iconSize || DEFAULT_ICON_SIZE;
+            dash.iconSize = size;
+            _resizeDashIcons();
+            if (dash._box) dash._box.queue_relayout();
+        };
 
         dash._redisplay = () => {
             // Inject our icon size before icon creation so GNOME Shell's native
@@ -633,6 +639,7 @@ class NativeDashWrapper {
 
         this._applyShowAppsIconSize(dash, iconSize);
         this._applyBackgroundStyle(config);
+        this._applyLabelStyle(config);
 
         this._extension._log(`_tryDoPosition done: w=${w} h=${h} x=${x} y=${y} nChildren=${dash._box?.get_children?.()?.length ?? '?'} showApps=${!!dash._showAppsIcon}`);
 
@@ -681,6 +688,12 @@ class NativeDashWrapper {
         dash.set_size(dockW, h);
         if (dash._background)
             dash._background.set_size(dockW, h);
+        // Guard: if the newly computed height differs significantly from the
+        // current allocation, wait for the next layout pass before positioning.
+        // The set_size calls above still take effect so the background is
+        // always up-to-date; only the (x, y) placement is deferred.
+        if (allocH > 0 && Math.abs(allocH - h) > iconSize * 0.5)
+            return null;
 
         const monitor = Main.layoutManager.monitors[this._monitorIndex];
         if (!monitor)
@@ -836,6 +849,29 @@ class NativeDashWrapper {
         setSize(showApps);
         if (showApps.queue_relayout)
             showApps.queue_relayout();
+    }
+
+    _applyLabelStyle(config) {
+        const dash = this.actor;
+        if (!dash || dash.is_destroyed?.())
+            return;
+        const bg = config.labelBackground ?? 'rgba(0,0,0,0.9)';
+        const radius = config.labelBorderRadius ?? 999;
+        const labelStyle = `background-color: ${bg}; border-radius: ${radius}px;`;
+        // Labels are DashItemContainer.label — St.Label added to chrome,
+        // not children of the dash actor.  Access them directly via each
+        // item's .label property instead of walking the actor tree.
+        const box = dash._box;
+        if (box) {
+            const n = box.get_n_children?.() ?? 0;
+            for (let i = 0; i < n; i++) {
+                const child = box.get_child_at_index(i);
+                if (child?.label && child.label.style !== labelStyle)
+                    child.label.style = labelStyle;
+            }
+        }
+        if (dash._showAppsIcon?.label && dash._showAppsIcon.label.style !== labelStyle)
+            dash._showAppsIcon.label.style = labelStyle;
     }
 
     reapplyIconSize() {
@@ -1060,6 +1096,8 @@ export default class NativeDockFollowMouseExtension extends Extension {
             'intellihide-hide-delay-ms',
             'background-padding',
             'background-border-radius',
+            'label-background',
+            'label-border-radius',
             'edge-reveal-timeout-ms',
         ];
 
@@ -1300,6 +1338,8 @@ export default class NativeDockFollowMouseExtension extends Extension {
         this._backgroundOpacity = this._getDouble('background-custom-opacity', 0.85);
         this._backgroundPadding = this._clampInt(this._getInt('background-padding', 12), 0, 60);
         this._backgroundBorderRadius = this._clampInt(this._getInt('background-border-radius', 28), 0, 60);
+        this._labelBackground = this._getString('label-background', 'rgba(0,0,0,0.9)');
+        this._labelBorderRadius = this._clampInt(this._getInt('label-border-radius', 999), 0, 999);
         this._edgeRevealTimeoutUs = this._clampInt(this._getInt('edge-reveal-timeout-ms', DEFAULT_EDGE_REVEAL_MS), 100, 30000) * 1000;
     }
 
@@ -1915,6 +1955,8 @@ export default class NativeDockFollowMouseExtension extends Extension {
             backgroundOpacity: this._backgroundOpacity,
             backgroundPadding: this._backgroundPadding,
             backgroundBorderRadius: this._backgroundBorderRadius,
+            labelBackground: this._labelBackground,
+            labelBorderRadius: this._labelBorderRadius,
         };
     }
 

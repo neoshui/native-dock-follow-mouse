@@ -150,6 +150,21 @@ export default class NativeDockFollowMousePreferences extends ExtensionPreferenc
             step: 1,
             unit: ' px',
         }));
+        appearanceGroup.add(this._createStringRow({
+            key: 'label-background',
+            title: 'Label tooltip background',
+            subtitle: 'CSS color for hover tooltip. Supports hex (#000), rgba, or any valid CSS color.',
+            default: 'rgba(0,0,0,0.9)',
+        }));
+        appearanceGroup.add(this._createSpinRow({
+            key: 'label-border-radius',
+            title: 'Label tooltip border radius',
+            subtitle: 'Roundness of the app-name tooltip corners. 999 = pill shape.',
+            min: 0,
+            max: 999,
+            step: 1,
+            unit: ' px',
+        }));
 
         const tuningGroup = new Adw.PreferencesGroup({
             title: 'Follow Mouse Tuning',
@@ -494,6 +509,8 @@ export default class NativeDockFollowMousePreferences extends ExtensionPreferenc
             'background-custom-opacity',
             'background-padding',
             'background-border-radius',
+            'label-background',
+            'label-border-radius',
         ];
 
         for (const key of keys)

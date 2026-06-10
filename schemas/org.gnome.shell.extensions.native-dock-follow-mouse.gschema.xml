@@ -124,5 +124,15 @@
       <summary>Background border radius</summary>
       <description>Border radius in pixels for the dock background.</description>
     </key>
+    <key type="s" name="label-background">
+      <default>'rgba(0,0,0,0.9)'</default>
+      <summary>Label tooltip background</summary>
+      <description>CSS background-color value for the hover tooltip label. Can be hex (#000), rgba (rgba(0,0,0,0.9)), or any valid CSS color.</description>
+    </key>
+    <key type="i" name="label-border-radius">
+      <default>999</default>
+      <summary>Label tooltip border radius</summary>
+      <description>Border radius in pixels for the hover tooltip label. 999 produces a pill/capsule shape.</description>
+    </key>
   </schema>
 </schemalist>
