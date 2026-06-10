@@ -59,8 +59,8 @@
 mkdir -p ~/.local/share/gnome-shell/extensions/
 unzip native-dock-follow-mouse-v1.0.zip -d ~/.local/share/gnome-shell/extensions/
 
-# Restart GNOME Shell: Alt+F2 → type 'r' → Enter
-# 重启 Shell：Alt+F2 → 输入 r → 回车
+# Restart GNOME Shell (X11: Alt+F2 → r → Enter; Wayland: log out and log back in)
+# 重启 Shell（X11: Alt+F2 → r → Enter；Wayland: 注销重新登录）
 
 # Enable the extension / 启用扩展
 gnome-extensions enable native-dock-follow-mouse@neoshui
@@ -74,7 +74,8 @@ cd native-dock-follow-mouse
 mkdir -p ~/.local/share/gnome-shell/extensions/native-dock-follow-mouse@neoshui
 cp -r * ~/.local/share/gnome-shell/extensions/native-dock-follow-mouse@neoshui/
 glib-compile-schemas ~/.local/share/gnome-shell/extensions/native-dock-follow-mouse@neoshui/schemas/
-# Alt+F2 → r → Enter
+# Restart GNOME Shell (X11: Alt+F2 → r → Enter; Wayland: log out and log back in)
+# 重启 Shell（X11: Alt+F2 → r → Enter；Wayland: 注销重新登录）
 ```
 
 ---
@@ -153,7 +154,8 @@ In **vertical** (left/right) layout, some icons may render blank and the hover t
 glib-compile-schemas schemas/
 
 # Reload extension / 重载扩展
-# Alt+F2 → r → Enter
+# Restart GNOME Shell (X11: Alt+F2 → r → Enter; Wayland: log out and log back in)
+# 重启 Shell（X11: Alt+F2 → r → Enter；Wayland: 注销重新登录）
 
 # Debug log / 调试日志
 gsettings set org.gnome.shell.extensions.native-dock-follow-mouse follow-mouse-debug true
