@@ -1,0 +1,128 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist gettext-domain="native-dock-follow-mouse">
+  <schema path="/org/gnome/shell/extensions/native-dock-follow-mouse/" id="org.gnome.shell.extensions.native-dock-follow-mouse">
+	    <key type="i" name="dock-mode">
+	      <default>0</default>
+	      <range min="0" max="2"/>
+	      <summary>Dock mode</summary>
+	      <description>0 = one dock follows the mouse, 2 = primary monitor only. Value 1 is reserved and currently falls back to mode 0.</description>
+	    </key>
+    <key type="i" name="dock-location">
+      <default>0</default>
+      <summary>Dock location</summary>
+      <description>0 = bottom, 1 = left, 2 = right, 3 = top.</description>
+    </key>
+    <key type="i" name="preferred-monitor">
+      <default>0</default>
+      <summary>Preferred monitor</summary>
+      <description>Current monitor for the single follow-mouse dock.</description>
+    </key>
+    <key type="i" name="monitor-count">
+      <default>1</default>
+      <summary>Monitor count</summary>
+      <description>Last known monitor count for preferences UI options.</description>
+    </key>
+    <key type="i" name="follow-mouse-poll-ms">
+      <default>200</default>
+      <summary>Follow mouse poll interval</summary>
+      <description>Mouse position polling interval in milliseconds.</description>
+    </key>
+    <key type="i" name="follow-mouse-debounce-ms">
+      <default>400</default>
+      <summary>Follow mouse debounce delay</summary>
+      <description>Required edge dwell time before switching monitors, in milliseconds.</description>
+    </key>
+	    <key type="i" name="follow-mouse-edge-px">
+	      <default>5</default>
+	      <range min="1" max="100"/>
+	      <summary>Follow mouse edge size</summary>
+	      <description>Trigger edge area size in pixels.</description>
+	    </key>
+    <key type="i" name="follow-mouse-fast-speed">
+      <default>1800</default>
+      <summary>Follow mouse fast edge push speed</summary>
+      <description>Pointer speed threshold in pixels per second for immediate monitor switching when hitting the dock edge.</description>
+    </key>
+    <key type="i" name="follow-mouse-icon-size">
+      <default>42</default>
+      <summary>Dock icon size</summary>
+      <description>Native Dock icon size in pixels.</description>
+    </key>
+    <key type="b" name="show-apps-icon">
+      <default>true</default>
+      <summary>Show applications icon</summary>
+      <description>Reserved for future GNOME Shell applications grid integration.</description>
+    </key>
+    <key type="s" name="active-dot-color">
+      <default>'#6ee7ff'</default>
+      <summary>Active dot color</summary>
+      <description>Color used for the active application highlight dot.</description>
+    </key>
+    <key type="b" name="follow-mouse-debug">
+      <default>false</default>
+      <summary>Follow mouse debug logs</summary>
+      <description>Enable verbose logs for Native Dock Follow Mouse.</description>
+    </key>
+    <key type="b" name="intellihide-enabled">
+      <default>false</default>
+      <summary>Intellihide</summary>
+      <description>Auto-hide the dock when a maximized window overlaps it. Hover near the dock edge to reveal.</description>
+    </key>
+    <key type="i" name="intellihide-hover-delay-ms">
+      <default>300</default>
+      <summary>Intellihide hover delay</summary>
+      <description>Delay in milliseconds before the dock appears when hovering near the edge.</description>
+    </key>
+    <key type="i" name="intellihide-hide-delay-ms">
+      <default>500</default>
+      <summary>Intellihide hide delay</summary>
+      <description>Delay in milliseconds before the dock hides after the mouse leaves.</description>
+    </key>
+    <key type="i" name="dock-edge-margin">
+      <default>8</default>
+      <summary>Edge margin (top/bottom)</summary>
+      <description>Distance between the screen edge and the dock when dock is at top or bottom, in pixels. Negative values push the dock closer to the edge.</description>
+    </key>
+    <key type="i" name="dock-edge-margin-vertical">
+      <default>8</default>
+      <summary>Edge margin (left/right)</summary>
+      <description>Distance between the screen edge and the dock when dock is at left or right, in pixels. Negative values push the dock closer to the edge.</description>
+    </key>
+    <key type="i" name="dock-icon-spacing">
+      <default>0</default>
+      <summary>Icon spacing</summary>
+      <description>Gap between app icon containers in pixels. 0 = no extra gap.</description>
+    </key>
+    <key type="i" name="edge-reveal-timeout-ms">
+      <default>1500</default>
+      <summary>Edge reveal timeout</summary>
+      <description>Duration in milliseconds that the dock stays visible when revealed by cursor at screen edge during fullscreen, or when revealing from intellihide.</description>
+    </key>
+    <key type="i" name="background-preset">
+      <default>0</default>
+      <summary>Background preset</summary>
+      <description>0 = Native dark, 1 = Light translucent, 2 = Transparent (no background), 3 = Custom color.</description>
+    </key>
+    <key type="s" name="background-custom-color">
+      <default>'#38383b'</default>
+      <summary>Custom background color (hex)</summary>
+      <description>Hex color code used when background preset is Custom. e.g. #38383b</description>
+    </key>
+    <key type="d" name="background-custom-opacity">
+      <default>0.85</default>
+      <range min="0.0" max="1.0"/>
+      <summary>Custom background opacity</summary>
+      <description>Opacity level (0.0–1.0) used when background preset is Custom.</description>
+    </key>
+    <key type="i" name="background-padding">
+      <default>12</default>
+      <summary>Background vertical padding</summary>
+      <description>Vertical padding in pixels between the dock background edge and app icons. Applied to both top and bottom. Total added height = 2x this value.</description>
+    </key>
+    <key type="i" name="background-border-radius">
+      <default>28</default>
+      <summary>Background border radius</summary>
+      <description>Border radius in pixels for the dock background.</description>
+    </key>
+  </schema>
+</schemalist>

@@ -1,0 +1,9 @@
+{
+  "name": "Native Dock Follow Mouse",
+  "description": "Standalone GNOME Shell dock that follows the mouse across monitors. Supports follow-mouse (mode 0), fixed (mode 1), and primary-only (mode 2) modes with intellihide, custom icon size, background styling, and edge-reveal for fullscreen apps. No Dash2Dock Animated, Dash to Dock, or Ubuntu Dock dependency.",
+  "uuid": "native-dock-follow-mouse@neoshui",
+  "settings-schema": "org.gnome.shell.extensions.native-dock-follow-mouse",
+  "url": "https://github.com/neoshui/native-dock-follow-mouse",
+  "shell-version": ["45", "46", "47", "48"],
+  "version": 8
+}

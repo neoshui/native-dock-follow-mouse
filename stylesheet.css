@@ -1,0 +1,40 @@
+/* Native Dock Follow Mouse — CSS overrides */
+
+.native-dock-follow-mouse-dock {
+    margin: 0 !important;
+}
+
+/* Background padding is now handled by _applyBackgroundStyle in extension.js */
+
+/* Vertical (left/right) dock styles */
+.native-dock-follow-mouse-dock.native-dock-vertical .dash-background {
+    padding-top: 6px;
+    padding-bottom: 6px;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+}
+
+/* Fix running dot overlap: adjust offset to avoid overlapping icon */
+.native-dock-follow-mouse-dock .dash-item-container .app-grid-running-dot {
+    offset-y: -4px !important;
+}
+
+/* Horizontal dock (top/bottom): separator is a 1px vertical divider */
+.native-dock-follow-mouse-dock:not(.native-dock-vertical) .dash-separator {
+    width: 1px !important;
+    min-width: 1px !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background-color: rgba(255, 255, 255, 0.15) !important;
+}
+
+/* Vertical dock (left/right): separator is a 1px horizontal divider */
+.native-dock-follow-mouse-dock.native-dock-vertical .dash-separator {
+    height: 1px !important;
+    min-height: 1px !important;
+    margin: 6px 0 !important;
+    padding: 0 !important;
+    background-color: rgba(255, 255, 255, 0.15) !important;
+}
