@@ -1458,6 +1458,32 @@ export default class NativeDockFollowMouseExtension extends Extension {
             this._handleIntellihideHover();
         }
 
+        // --- Sticky-label safety net ---
+        // If the pointer is not near any dock, hide all visible labels.
+        // This catches cases where notify::hover fails to fire (e.g. reactive
+        // state transitions, brief actor destruction during redisplay).
+        if (this._docks.size > 0) {
+            const [px, py] = global.get_pointer();
+            const monIdx = this._getMonitorAt(px, py);
+            const onDock = monIdx >= 0 && this._docks.has(monIdx) &&
+                this._isPointerOnDockArea(px, py);
+            if (!onDock) {
+                for (const dock of this._docks.values()) {
+                    if (!dock.actor || dock.actor.is_destroyed?.())
+                        continue;
+                    const hideLabels = (actor) => {
+                        if (!actor) return;
+                        if (actor.label && actor.label.visible)
+                            actor.label.hide();
+                        const n = actor.get_n_children?.() ?? 0;
+                        for (let i = 0; i < n; i++)
+                            hideLabels(actor.get_child_at_index(i));
+                    };
+                    hideLabels(dock.actor);
+                }
+            }
+        }
+
         // --- Visibility ---
         this._syncDockVisibility();
 
