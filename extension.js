@@ -751,6 +751,56 @@ class NativeDashWrapper {
             // Patch separator set_size interceptors so layout can't override our size.
             if (dash._fixSeparators) dash._fixSeparators();
 
+            // Patch tooltip label positioning for vertical layout.
+            // Native showLabel() places the label centered above the icon
+            // (y = stageY - labelH - yOffset).  In vertical layout the dock
+            // is on the left/right edge; reposition the label to the side
+            // of the icon instead, at vertical center.
+            const labelGap = 8;
+            for (let i = 0; i < n; i++) {
+                const item = box.get_child_at_index(i);
+                if (!item || !item.label || item._nfdmLabelPatched)
+                    continue;
+                item._nfdmLabelPatched = true;
+                const origShow = item.showLabel.bind(item);
+                const origHide = item.hideLabel.bind(item);
+                item._nfdmOrigShowLabel = origShow;
+                item._nfdmOrigHideLabel = origHide;
+                item.showLabel = function () {
+                    // Check orientation dynamically from CSS class
+                    const isVert = dash.has_style_class_name?.('native-dock-vertical');
+                    if (!isVert)
+                        return origShow();
+                    if (!this._labelText) return;
+                    this.label.set_text(this._labelText);
+                    this.label.opacity = 0;
+                    this.label.show();
+                    const [stageX, stageY] = this.get_transformed_position();
+                    const [itemW, itemH] = [this.allocation.get_width(), this.allocation.get_height()];
+                    const labelH = this.label.get_height();
+                    // Position to the right of the icon, centered vertically
+                    const x = stageX + itemW + labelGap;
+                    const y = Math.floor(stageY + (itemH - labelH) / 2);
+                    this.label.set_position(x, y);
+                    this.label.ease({
+                        opacity: 255,
+                        duration: 200,
+                        mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+                    });
+                };
+                item.hideLabel = function () {
+                    const isVert = dash.has_style_class_name?.('native-dock-vertical');
+                    if (!isVert)
+                        return origHide();
+                    this.label.ease({
+                        opacity: 0,
+                        duration: 200,
+                        mode: Clutter.AnimationMode.EASE_OUT_QUAD,
+                        onComplete: () => { this.label.hide(); },
+                    });
+                };
+            }
+
             if (dash.queue_relayout) dash.queue_relayout();
             if (box.queue_relayout) box.queue_relayout();
             if (dashContainer.queue_relayout) dashContainer.queue_relayout();
@@ -989,7 +1039,6 @@ export default class NativeDockFollowMouseExtension extends Extension {
         this._intellihideHideTimeoutId = null;
         this._sourceIds = new Set();
         this._intellihideHidden = false;
-        this._intellihideHiddenByMonitor = new Map();
         this._docks = new Map();
         this._currentMonitor = -1;
         this._pendingMonitor = -1;
@@ -1223,23 +1272,12 @@ export default class NativeDockFollowMouseExtension extends Extension {
             GLib.source_remove(this._intellihideTimeoutId);
         this._intellihideTimeoutId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 50, () => {
             this._intellihideTimeoutId = null;
-
-            if (this._dockMode === 1) {
-                // Mode 1: per-monitor intellihide
-                for (const monitorIdx of this._docks.keys()) {
-                    const maximized = this._isAnyMaximizedOnDockMonitor(monitorIdx);
-                    this._log(`windowStateChanged[${monitorIdx}]: maximized=${maximized}`);
-                    this._intellihideHiddenByMonitor.set(monitorIdx, maximized);
-                }
-            } else {
-                const maximized = this._isAnyMaximizedOnDockMonitor();
-                this._log(`windowStateChanged: maximized=${maximized} monitor=${this._currentMonitor}`);
-                // Don't hide if pointer is on dock area (hover reveal active)
-                if (maximized && this._intellihideHoverActive)
-                    return GLib.SOURCE_REMOVE;
-                this._intellihideHidden = maximized;
-            }
-
+            const maximized = this._isAnyMaximizedOnDockMonitor();
+            this._log(`windowStateChanged: maximized=${maximized} monitor=${this._currentMonitor}`);
+            // Don't hide if pointer is on dock area (hover reveal active)
+            if (maximized && this._intellihideHoverActive)
+                return GLib.SOURCE_REMOVE;
+            this._intellihideHidden = maximized;
             this._syncDockVisibility();
             return GLib.SOURCE_REMOVE;
         });
@@ -1250,14 +1288,7 @@ export default class NativeDockFollowMouseExtension extends Extension {
 
         if (key === 'intellihide-enabled') {
             this._connectWindowSignals();
-            if (this._dockMode === 1) {
-                for (const monitorIdx of this._docks.keys()) {
-                    const maximized = this._isAnyMaximizedOnDockMonitor(monitorIdx);
-                    this._intellihideHiddenByMonitor.set(monitorIdx, maximized);
-                }
-            } else {
-                this._intellihideHidden = this._isAnyMaximizedOnDockMonitor();
-            }
+            this._intellihideHidden = this._isAnyMaximizedOnDockMonitor();
         }
 
         if (key === 'preferred-monitor' && this._dockMode === 0)
@@ -1267,7 +1298,6 @@ export default class NativeDockFollowMouseExtension extends Extension {
             this._currentMonitor = this._initialMonitor();
             this._pendingMonitor = this._currentMonitor;
             this._pendingSince = GLib.get_monotonic_time();
-            this._intellihideHiddenByMonitor = new Map();
             this._intellihideHidden = false;
             this._rebuildDocks();
             return;
@@ -1456,27 +1486,16 @@ export default class NativeDockFollowMouseExtension extends Extension {
         this._lastDocksVisible = null;
 
         const config = this._configSnapshot();
+        const target = this._resolveTargetMonitor();
 
-        if (this._dockMode === 1) {
-            // Mode 1: dock on every monitor
-            for (let i = 0; i < Main.layoutManager.monitors.length; i++) {
-                if (this._isValidMonitor(i)) {
-                    const dock = new NativeDashWrapper(this, i);
-                    this._docks.set(i, dock);
-                    dock.reposition(config);
-                }
-            }
-        } else {
-            const target = this._resolveTargetMonitor();
-            if (this._isValidMonitor(target)) {
-                const dock = new NativeDashWrapper(this, target);
-                this._docks.set(target, dock);
-                dock.reposition(config);
-            }
+        if (this._isValidMonitor(target)) {
+            const dock = new NativeDashWrapper(this, target);
+            this._docks.set(target, dock);
+            dock.reposition(config);
         }
 
         this._syncDockVisibility();
-        this._log(`docks on ${[...this._docks.keys()].join(', ')}`);
+        this._log(`dock on monitor ${target}`);
     }
 
     _resolveTargetMonitor() {
@@ -1502,18 +1521,11 @@ export default class NativeDockFollowMouseExtension extends Extension {
     }
 
     _syncDockVisibility() {
-        if (this._dockMode === 1) {
-            for (const [monitorIdx, dock] of this._docks) {
-                const visible = this._shouldShowDock(monitorIdx);
-                dock.setVisible(visible);
-            }
-        } else {
-            const visible = this._shouldShowDock();
-            this._setDocksVisible(visible);
-        }
+        const visible = this._shouldShowDock();
+        this._setDocksVisible(visible);
     }
 
-    _shouldShowDock(monitorIdx = null) {
+    _shouldShowDock() {
         if (Main.overview?.visible)
             return false;
 
@@ -1527,14 +1539,9 @@ export default class NativeDockFollowMouseExtension extends Extension {
         }
 
         // Intellihide: hide when a maximized window overlaps the dock
-        if (this._intellihideEnabled) {
-            const hidden = monitorIdx !== null
-                ? (this._intellihideHiddenByMonitor.get(monitorIdx) ?? false)
-                : this._intellihideHidden;
-            if (hidden) {
-                this._log(`shouldShow[${monitorIdx ?? 'global'}]: false (intellihide hidden)`);
-                return false;
-            }
+        if (this._intellihideEnabled && this._intellihideHidden) {
+            this._log(`shouldShow: false (intellihide hidden)`);
+            return false;
         }
 
         this._edgeRevealUntilUs = 0;
@@ -1613,11 +1620,11 @@ export default class NativeDockFollowMouseExtension extends Extension {
         return false;
     }
 
-    _isAnyMaximizedOnDockMonitor(monitorIdx = null) {
+    _isAnyMaximizedOnDockMonitor() {
         if (!this._intellihideEnabled)
             return false;
 
-        const dockMonitorIdx = monitorIdx !== null ? monitorIdx : this._currentMonitor;
+        const dockMonitorIdx = this._currentMonitor;
         if (!this._isValidMonitor(dockMonitorIdx)) {
             this._log(`_isAnyMaximized: invalid monitor ${dockMonitorIdx}`);
             return false;
@@ -1668,10 +1675,8 @@ export default class NativeDockFollowMouseExtension extends Extension {
         return false;
     }
 
-    _isPointerOnDockArea(x, y, monitorIdx = null) {
-        const index = monitorIdx !== null
-            ? monitorIdx
-            : (this._isValidMonitor(this._currentMonitor) ? this._currentMonitor : this._getMonitorAt(x, y));
+    _isPointerOnDockArea(x, y) {
+        const index = this._isValidMonitor(this._currentMonitor) ? this._currentMonitor : this._getMonitorAt(x, y);
         if (!this._isValidMonitor(index))
             return false;
         const monitor = Main.layoutManager.monitors[index];
@@ -1685,10 +1690,7 @@ export default class NativeDockFollowMouseExtension extends Extension {
         // When dock visible: use actual dock height for hit test.
         // When hidden: use edgePx only (screen edge trigger).
         let zone;
-        const hidden = monitorIdx !== null
-            ? (this._intellihideHiddenByMonitor.get(monitorIdx) ?? false)
-            : this._intellihideHidden;
-        if (!hidden) {
+        if (!this._intellihideHidden) {
             const dock = this._docks.get(index);
             zone = (dock?.actor && !dock.actor.is_destroyed?.()) ? dock.actor.height : 80;
         } else {
@@ -1705,12 +1707,6 @@ export default class NativeDockFollowMouseExtension extends Extension {
 
     _handleIntellihideHover() {
         const [x, y] = global.get_pointer();
-
-        if (this._dockMode === 1) {
-            this._handleIntellihideHoverMode1(x, y);
-            return;
-        }
-
         const isOnDockArea = this._isPointerOnDockArea(x, y);
 
         if (isOnDockArea) {
@@ -1752,24 +1748,6 @@ export default class NativeDockFollowMouseExtension extends Extension {
         }
     }
 
-    _handleIntellihideHoverMode1(x, y) {
-        for (const [monitorIdx] of this._docks) {
-            const isOnDock = this._isPointerOnDockArea(x, y, monitorIdx);
-            const hidden = this._intellihideHiddenByMonitor.get(monitorIdx) ?? false;
-
-            if (isOnDock && hidden) {
-                this._log(`intellihide mode1: revealing dock on monitor ${monitorIdx}`);
-                this._intellihideHiddenByMonitor.set(monitorIdx, false);
-            } else if (!isOnDock && !hidden) {
-                if (this._isAnyMaximizedOnDockMonitor(monitorIdx)) {
-                    this._log(`intellihide mode1: hiding dock on monitor ${monitorIdx}`);
-                    this._intellihideHiddenByMonitor.set(monitorIdx, true);
-                }
-            }
-        }
-        this._syncDockVisibility();
-    }
-
     _switchMonitor(monitorIdx, immediate = false) {
         if (this._dockMode !== 0)
             return;
@@ -1808,7 +1786,6 @@ export default class NativeDockFollowMouseExtension extends Extension {
             this._log('intellihide: hidden (switched to monitor with maximized)');
         } else if (!maximized && this._intellihideHidden) {
             this._intellihideHidden = false;
-            this._intellihideHiddenByMonitor = new Map();
             this._intellihideHoverActive = false;
             this._syncDockVisibility();
             this._log('intellihide: shown (switched to monitor without maximized)');

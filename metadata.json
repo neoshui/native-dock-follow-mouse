@@ -4,6 +4,12 @@
   "uuid": "native-dock-follow-mouse@neoshui",
   "settings-schema": "org.gnome.shell.extensions.native-dock-follow-mouse",
   "url": "https://github.com/neoshui/native-dock-follow-mouse",
-  "shell-version": ["45", "46", "47", "48"],
+  "shell-version": [
+    "45",
+    "46",
+    "47",
+    "48",
+    "50"
+  ],
   "version": 8
 }
