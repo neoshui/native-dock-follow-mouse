@@ -361,6 +361,20 @@ class NativeDashWrapper {
         // Use opacity instead of visibility so layout still computes when hidden.
         this.actor.opacity = visible ? 255 : 0;
         this._setRecurseReactive(this.actor, visible);
+        // When hiding, also force-hide all tooltip labels. Their hover state
+        // becomes stale because the dock actors become non-reactive, so
+        // notify::hover never fires and labels stay visible.
+        if (!visible) {
+            const hideLabels = (actor) => {
+                if (!actor) return;
+                if (actor.label)
+                    actor.label.hide();
+                const n = actor.get_n_children?.() ?? 0;
+                for (let i = 0; i < n; i++)
+                    hideLabels(actor.get_child_at_index(i));
+            };
+            hideLabels(this.actor);
+        }
     }
 
     _setRecurseReactive(actor, reactive) {
