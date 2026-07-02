@@ -609,7 +609,6 @@ class NativeDashWrapper {
             if (location === 3) {
                 x = monitor.x + Math.floor((monitor.width - targetW) / 2);
                 y = monitor.y + margin;
-                console.log(`[NFDM-DEBUG] TOP: margin=${margin} y=${y} monitorY=${monitor.y}`);
             } else {
                 x = monitor.x + Math.floor((monitor.width - targetW) / 2);
                 y = monitor.y + monitor.height - dockH - margin;

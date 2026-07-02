@@ -1,6 +1,10 @@
 /* Native Dock Follow Mouse — CSS overrides */
 
-.native-dock-follow-mouse-dock {
+/* Neutralize GNOME 50 theme styling on our dock (#dash still matches name='dash') */
+.native-dock-follow-mouse-dock,
+.native-dock-follow-mouse-dock .dash-background,
+.native-dock-follow-mouse-dock .dash-item-container {
+    padding: 0 !important;
     margin: 0 !important;
 }
 
