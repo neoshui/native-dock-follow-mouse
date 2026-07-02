@@ -12,7 +12,6 @@ import Shell from 'gi://Shell';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
-import {PACKAGE_VERSION} from 'resource:///org/gnome/shell/misc/config.js';
 
 log('NativeDock: extension.js top-level code executed');
 
@@ -49,12 +48,6 @@ class NativeDashWrapper {
         log(`[NFDM] NativeDashWrapper CONSTRUCTOR monitor=${monitorIndex}`);
         this._extension = extension;
         this._monitorIndex = monitorIndex;
-        // GNOME Shell version detection for compatibility
-        this._shellMajor = PACKAGE_VERSION
-            ? Number(PACKAGE_VERSION.split('.')[0])
-            : 48;
-        this._isGNOME50OrLater = this._shellMajor >= 50;
-        log(`[NFDM] GNOME Shell ${this._shellMajor} detected`);
         this._originalDash = null;
         this._originalDashParent = null;
         this._originalDashShow = null;
@@ -62,13 +55,11 @@ class NativeDashWrapper {
         this._originalDashRedisplay = null;
         this._originalDashQueueRedisplay = null;
         this._originalDashAdjustIconSize = null;
-        this._hadOriginalAdjustIconSize = false;
         this._hadOriginalFixSeparators = false;
         this._originalDashFixSeparators = null;
         this._patchedSeparators = new Map();
         this._sourceIds = new Set();
         this._repositionLaterId = 0;
-        this._initialSetupId = 0;
         this._retryId = 0;
         this._showAppsClickId = 0;
         this._lastConfig = null;
@@ -159,7 +150,6 @@ class NativeDashWrapper {
         this._originalDashAdjustIconSize = dash._adjustIconSize;
         this._hadOriginalFixSeparators = Object.prototype.hasOwnProperty.call(dash, '_fixSeparators');
         this._originalDashFixSeparators = dash._fixSeparators;
-        this._hadOriginalAdjustIconSize = Object.prototype.hasOwnProperty.call(dash, '_adjustIconSize');
 
         const _origRedisplay = this._originalDashRedisplay.bind(dash);
         const _origQueueRedisplay = this._originalDashQueueRedisplay.bind(dash);
@@ -190,20 +180,17 @@ class NativeDashWrapper {
                 dash._showAppsIcon.icon.setIconSize(size);
         };
 
-        // Intercept _adjustIconSize (GNOME 49 and earlier):
-        // let the original run for its side effects (ensure_style, theme spacing
-        // hints needed by vertical layout), then reapply our icon size and resize
-        // all icons so the native auto-sizing never overrides our configured size.
-        // In GNOME 50+, _adjustIconSize may not exist; we rely on _redisplay wrapper.
-        if (this._hadOriginalAdjustIconSize) {
-            dash._adjustIconSize = () => {
-                _origAdjustIconSize();
-                const size = self._iconSize || DEFAULT_ICON_SIZE;
-                dash.iconSize = size;
-                _resizeDashIcons();
-                if (dash._box) dash._box.queue_relayout();
-            };
-        }
+        // Intercept _adjustIconSize: let the original run for its side effects
+        // (ensure_style, theme spacing hints needed by vertical layout), then
+        // reapply our icon size and resize all icons so the native auto-sizing
+        // never overrides our configured size.
+        dash._adjustIconSize = () => {
+            _origAdjustIconSize();
+            const size = self._iconSize || DEFAULT_ICON_SIZE;
+            dash.iconSize = size;
+            _resizeDashIcons();
+            if (dash._box) dash._box.queue_relayout();
+        };
 
         dash._redisplay = () => {
             // Inject our icon size before icon creation so GNOME Shell's native
@@ -211,12 +198,6 @@ class NativeDashWrapper {
             // GNOME Shell reads `this.iconSize` (no underscore, default 64) at
             // line 527 of its dash.js: appIcon.icon.setIconSize(this.iconSize).
             dash.iconSize = self._iconSize || DEFAULT_ICON_SIZE;
-            // GNOME 50+ guard: skip _origRedisplay if the dash container is not
-            // in the stage tree yet, to prevent st_widget_get_theme_node warnings.
-            if (PACKAGE_VERSION && Number(PACKAGE_VERSION.split('.')[0]) >= 50 && !wrapper.actor.get_stage()) {
-                _resizeDashIcons();
-                return;
-            }
             _origRedisplay();
             // _adjustIconSize() is a noop (we replaced it above), but its
             // essential side effect — ensure_style() on the first icon — is
@@ -347,25 +328,10 @@ class NativeDashWrapper {
             trackFullscreen: true,
         });
 
-        // Defer initial redisplay to idle so all StWidget theme node
-        // operations happen after the stage tree is fully settled.
-        // The first _poll() / reposition() call will wait until this runs.
-        this._initialSetupId = this._laterAdd(Meta.LaterType.IDLE, () => {
-            this._initialSetupId = 0;
-            const size = self._iconSize || DEFAULT_ICON_SIZE;
-            // GNOME 50 stage-guard: wrap _redisplay to prevent
-            // st_widget_get_theme_node when the container is not yet
-            // fully attached to the stage tree.
-            if (this.actor.get_stage()) {
-                dash._redisplay();
-            } else {
-                // Retry next frame if stage isn't ready.
-                return GLib.SOURCE_CONTINUE;
-            }
-            this._redisplayCalled = true;
-            this._scheduleReposition();
-            return GLib.SOURCE_REMOVE;
-        });
+        // Initial redisplay at our icon size — must happen AFTER addChrome
+        // so the dash is in the stage tree for proper theme node operations.
+        const size = self._iconSize || DEFAULT_ICON_SIZE;
+        dash._redisplay();
 
         // Show-apps button's built-in handler only toggles between
         // window-picker / app-grid within the overview. When the overview
@@ -464,8 +430,77 @@ class NativeDashWrapper {
 
         this._pendingConfig = config;
 
-        // Position is retried by the poll cycle; no frame-rate retry needed.
         this._tryDoPosition();
+
+        this._scheduleRetry();
+        this._retryCount = 0;
+    }
+
+    _scheduleRetry() {
+        if (this._retryId)
+            return;
+
+        // Prefer Meta.later BEFORE_REDRAW (runs after layout, before paint).
+        // Fallback to after-paint signal if Meta.later unavailable.
+        if (Meta.LaterType && typeof Meta.LaterType.BEFORE_REDRAW === 'number') {
+            this._retryId = this._laterAdd(Meta.LaterType.BEFORE_REDRAW,
+                this._onRetryTick.bind(this));
+        }
+
+        if (!this._retryId) {
+            // Fallback: after-paint signal (Clutter, all versions)
+            this._retryId = global.stage.connect('after-paint',
+                this._onAfterPaint.bind(this));
+            this._retryIsSignal = true;
+        }
+    }
+
+    _onRetryTick() {
+        this._retryId = 0;
+
+        if (!this.actor || this.actor.is_destroyed?.())
+            return GLib.SOURCE_REMOVE;
+
+        if (++this._retryCount > MAX_RETRY_ATTEMPTS) {
+            this._extension._warn(`retry: giving up after ${MAX_RETRY_ATTEMPTS} attempts for monitor ${this._monitorIndex}`);
+            return GLib.SOURCE_REMOVE;
+        }
+
+        if (!this._pendingConfig)
+            return GLib.SOURCE_REMOVE;
+
+        if (this._tryDoPosition())
+            return GLib.SOURCE_REMOVE;
+
+        this._scheduleRetry();
+        return GLib.SOURCE_REMOVE;
+    }
+
+    _onAfterPaint() {
+        if (!this.actor || this.actor.is_destroyed?.()) {
+            this._cancelRetry();
+            return;
+        }
+
+        if (!this._pendingConfig) {
+            this._cancelRetry();
+            return;
+        }
+
+        if (this._tryDoPosition()) {
+            this._cancelRetry();
+            this._retryCount = 0;
+            return;
+        }
+
+        if (++this._retryCount > MAX_RETRY_ATTEMPTS) {
+            this._extension._warn(`after-paint: giving up after ${MAX_RETRY_ATTEMPTS} attempts for monitor ${this._monitorIndex}`);
+            this._cancelRetry();
+            return;
+        }
+
+        // Still not ready — continue waiting for next paint
+        // The signal stays connected, so this will be called again next frame
     }
 
     _tryDoPosition() {
@@ -484,27 +519,19 @@ class NativeDashWrapper {
         // the correct orientation when we read dimensions.
         this._applyOrientation(location);
 
-        // Wait for the deferred idle setup to complete before positioning.
-        // The first _redisplay() runs in an IDLE callback after addChrome,
-        // so all StWidget theme node operations happen with a valid stage.
-        if (!this._redisplayCalled)
-            return false;
+        // On first positioning, force _redisplay once to rebuild icons at the configured size.
+        // The captured native dash has default-sized icons; _redisplay applies our iconSize.
+        if (!this._redisplayCalled && typeof dash._redisplay === 'function') {
+            this._redisplayCalled = true;
+            dash._redisplay();
+            return false; // wait for layout to settle
+        }
 
         const allocW = dash.width;
         const allocH = dash.height;
 
-        // Soft stage guard: when the dash and its children are not yet in the
-        // stage tree (before addChrome settles), skip accurate measurements
-        // that would trigger st_widget_get_theme_node warnings. Use estimated
-        // placement instead so the dock appears immediately.
-        const inStage = !!dash?.get_stage?.();
-
-        if (allocW < iconSize || allocH < iconSize) {
-            if (!inStage)
-                return false;
-            // Allocated in stage but too small — retry next frame.
+        if (allocW < iconSize || allocH < iconSize)
             return false;
-        }
 
         if (!this._firstLayoutReady) {
             const makeChildrenReactive = (actor) => {
@@ -537,46 +564,32 @@ class NativeDashWrapper {
             if (h > w && h > iconSize * 3)
                 return false;
 
+            // Measure dock width from children's natural widths.
             let targetW = 0;
-            let dockH = 0;
-
-            if (inStage) {
-                // Accurate measurement — dash is in the stage tree.
-                // Measure dock width from children's natural widths.
-                const measW = (c) => {
-                    if (!c || !c.visible) return;
-                    try {
-                        const [nw] = c.get_preferred_width(-1);
-                        targetW += Math.ceil(nw || 0);
-                    } catch (_e) {}
-                };
-                if (dash._box) {
-                    for (const child of dash._box.get_children()) {
-                        if (child && child.visible) measW(child);
-                    }
+            const measW = (c) => {
+                if (!c || !c.visible) return;
+                const [nw] = c.get_preferred_width(-1);
+                targetW += Math.ceil(nw || 0);
+            };
+            if (dash._box) {
+                for (const child of dash._box.get_children()) {
+                    if (child && child.visible) measW(child);
                 }
-                measW(dash._showAppsIcon);
-                targetW += config.backgroundPadding * 2;
-
-                // Measure dock height from children + background padding
-                const measH = (c) => {
-                    if (!c || !c.visible) return;
-                    try {
-                        const [, nh] = c.get_preferred_height(-1);
-                        dockH = Math.max(dockH, Math.ceil(nh || 0));
-                    } catch (_e) {}
-                };
-                if (dash._box)
-                    dash._box.get_children().forEach(measH);
-                measH(dash._showAppsIcon);
-                dockH += config.backgroundPadding * 2;
-            } else {
-                // Estimated sizing — avoid theme node access while not in stage.
-                // Use number of icons × iconSize as a rough width estimate.
-                const nIcons = dash._box?.get_n_children?.() ?? 0;
-                targetW = Math.max(nIcons, 1) * (iconSize + 6) + config.backgroundPadding * 2;
-                dockH = iconSize + config.backgroundPadding * 2;
             }
+            measW(dash._showAppsIcon);
+            targetW += config.backgroundPadding * 2;
+
+            // Measure dock height from children + background padding
+            let dockH = 0;
+            const measH = (c) => {
+                if (!c || !c.visible) return;
+                const [, nh] = c.get_preferred_height(-1);
+                dockH = Math.max(dockH, Math.ceil(nh || 0));
+            };
+            if (dash._box)
+                dash._box.get_children().forEach(measH);
+            measH(dash._showAppsIcon);
+            dockH += config.backgroundPadding * 2;
 
             const monitor = Main.layoutManager.monitors[this._monitorIndex];
             if (!monitor)
@@ -596,11 +609,9 @@ class NativeDashWrapper {
             if (location === 3) {
                 x = monitor.x + Math.floor((monitor.width - targetW) / 2);
                 y = monitor.y + margin;
-                this._extension._log(`pos debug: TOP margin=${margin} dockH=${dockH} targetW=${targetW} y=${y} inStage=${inStage} iconSize=${iconSize}`);
             } else {
                 x = monitor.x + Math.floor((monitor.width - targetW) / 2);
                 y = monitor.y + monitor.height - dockH - margin;
-                this._extension._log(`pos debug: BOTTOM margin=${margin} dockH=${dockH} targetW=${targetW} y=${y} screenH=${monitor.height} inStage=${inStage} iconSize=${iconSize}`);
             }
         }
 
@@ -641,49 +652,33 @@ class NativeDashWrapper {
         const box = dash._box;
         const n = box?.get_n_children?.() ?? 0;
         const spacing = box?.layout_manager?.spacing ?? 0;
-        const inStage = !!dash?.get_stage?.();
 
         let dockW = iconSize + 40;
         let dockH = 0;
         let firstChildH = 0;
         let firstSeen = false;
-
-        if (!inStage) {
-            // Estimated sizing — avoid theme node access while not in stage.
-            dockH = iconSize + 40;
-        } else {
-            for (let i = 0; i < n; i++) {
-                const child = box.get_child_at_index(i);
-                if (!child) continue;
-                if (child.has_style_class_name?.('dash-separator')) {
-                    dockH += (firstSeen ? spacing : 0) + 1;
-                    firstSeen = true;
-                    continue;
-                }
-                let natW = 0, natH = 0;
-                try {
-                    [natW] = child.get_preferred_width?.(-1) ?? [0, 0];
-                    [, natH] = child.get_preferred_height?.(-1) ?? [0, 0];
-                } catch (_e) {}
-                if (!firstSeen) firstChildH = natH || 0;
-                dockW = Math.max(dockW, natW || 0);
-                dockH += (firstSeen ? spacing : 0) + (natH || 0);
+        for (let i = 0; i < n; i++) {
+            const child = box.get_child_at_index(i);
+            if (!child) continue;
+            if (child.has_style_class_name?.('dash-separator')) {
+                dockH += (firstSeen ? spacing : 0) + 1;
                 firstSeen = true;
+                continue;
             }
+            const [natW] = child.get_preferred_width?.(-1) ?? [0, 0];
+            const [, natH] = child.get_preferred_height?.(-1) ?? [0, 0];
+            if (!firstSeen) firstChildH = natH || 0;
+            dockW = Math.max(dockW, natW || 0);
+            dockH += (firstSeen ? spacing : 0) + (natH || 0);
+            firstSeen = true;
         }
-
         dockW += 12;
         dockH = Math.max(dockW, dockH);
         const showApps = dash._showAppsIcon;
         const dashContainer = dash._dashContainer;
         let h;
         if (showApps && dashContainer && showApps.get_parent() === dashContainer) {
-            let natSH = 0;
-            if (inStage) {
-                try {
-                    [, natSH] = showApps.get_preferred_height?.(-1) ?? [0, 0];
-                } catch (_e) {}
-            }
+            const [, natSH] = showApps.get_preferred_height?.(-1) ?? [0, 0];
             const showAppsH = natSH || firstChildH || iconSize;
             const dclSpacing = dashContainer?.layout_manager?.spacing ?? 0;
             h = dockH + dclSpacing + showAppsH;
@@ -756,56 +751,6 @@ class NativeDashWrapper {
 
             // Patch separator set_size interceptors so layout can't override our size.
             if (dash._fixSeparators) dash._fixSeparators();
-
-            // Patch tooltip label positioning for vertical layout.
-            // Native showLabel() places the label centered above the icon
-            // (y = stageY - labelH - yOffset).  In vertical layout the dock
-            // is on the left/right edge; reposition the label to the side
-            // of the icon instead, at vertical center.
-            const labelGap = 8;
-            for (let i = 0; i < n; i++) {
-                const item = box.get_child_at_index(i);
-                if (!item || !item.label || item._nfdmLabelPatched)
-                    continue;
-                item._nfdmLabelPatched = true;
-                const origShow = item.showLabel.bind(item);
-                const origHide = item.hideLabel.bind(item);
-                item._nfdmOrigShowLabel = origShow;
-                item._nfdmOrigHideLabel = origHide;
-                item.showLabel = function () {
-                    // Check orientation dynamically from CSS class
-                    const isVert = dash.has_style_class_name?.('native-dock-vertical');
-                    if (!isVert)
-                        return origShow();
-                    if (!this._labelText) return;
-                    this.label.set_text(this._labelText);
-                    this.label.opacity = 0;
-                    this.label.show();
-                    const [stageX, stageY] = this.get_transformed_position();
-                    const [itemW, itemH] = [this.allocation.get_width(), this.allocation.get_height()];
-                    const labelH = this.label.get_height();
-                    // Position to the right of the icon, centered vertically
-                    const x = stageX + itemW + labelGap;
-                    const y = Math.floor(stageY + (itemH - labelH) / 2);
-                    this.label.set_position(x, y);
-                    this.label.ease({
-                        opacity: 255,
-                        duration: 200,
-                        mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-                    });
-                };
-                item.hideLabel = function () {
-                    const isVert = dash.has_style_class_name?.('native-dock-vertical');
-                    if (!isVert)
-                        return origHide();
-                    this.label.ease({
-                        opacity: 0,
-                        duration: 200,
-                        mode: Clutter.AnimationMode.EASE_OUT_QUAD,
-                        onComplete: () => { this.label.hide(); },
-                    });
-                };
-            }
 
             if (dash.queue_relayout) dash.queue_relayout();
             if (box.queue_relayout) box.queue_relayout();
@@ -963,10 +908,6 @@ class NativeDashWrapper {
 
     destroy() {
         log(`[NFDM] NativeDashWrapper DESTROY monitor=${this._monitorIndex}`);
-        if (this._initialSetupId) {
-            this._laterRemove(this._initialSetupId);
-            this._initialSetupId = 0;
-        }
         this._cancelRetry();
         if (this._repositionLaterId) {
             this._laterRemove(this._repositionLaterId);
@@ -1477,47 +1418,15 @@ export default class NativeDockFollowMouseExtension extends Extension {
         // --- Visibility ---
         this._syncDockVisibility();
 
-        // --- Sticky-label safety net ---
-        // If the pointer is not near any dock, hide all visible labels.
-        // This catches cases where notify::hover fails to fire (e.g. reactive
-        // state transitions, brief actor destruction during redisplay).
-        if (this._docks.size > 0) {
-            const [px, py] = global.get_pointer();
-            const monIdx = this._getMonitorAt(px, py);
-            const onDock = monIdx >= 0 && this._docks.has(monIdx) &&
-                this._isPointerOnDockArea(px, py);
-            if (!onDock) {
-                for (const dock of this._docks.values()) {
-                    if (!dock.actor || dock.actor.is_destroyed?.())
-                        continue;
-                    const hideLabels = (actor) => {
-                        if (!actor) return;
-                        if (actor.label && actor.label.visible)
-                            actor.label.hide();
-                        const n = actor.get_n_children?.() ?? 0;
-                        for (let i = 0; i < n; i++)
-                            hideLabels(actor.get_child_at_index(i));
-                    };
-                    hideLabels(dock.actor);
-                }
-            }
-        }
-
         // Keep repositioning the dock until icons finish loading asynchronously,
         // and also if the dock's dimensions changed since last position.
-        // Skip if retries are active — don't overlap retry cycles.
         if (this._isValidMonitor(this._currentMonitor)) {
             const dock = this._docks.get(this._currentMonitor);
             if (dock && dock.actor && !dock.actor.is_destroyed?.() && !dock._animating) {
                 const needsReposition = !dock._firstLayoutReady ||
                     dock.actor.width !== (dock._lastPositionedW || 0) ||
                     dock.actor.height !== (dock._lastPositionedH || 0);
-                if (needsReposition &&
-                    (dock._lastPositionedW === undefined ||
-                     dock.actor.width !== dock._lastFailedW ||
-                     dock.actor.height !== dock._lastFailedH)) {
-                    dock._lastFailedW = dock.actor.width;
-                    dock._lastFailedH = dock.actor.height;
+                if (needsReposition) {
                     dock.reposition(this._configSnapshot());
                 }
             }
