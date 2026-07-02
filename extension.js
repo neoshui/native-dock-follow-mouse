@@ -12,6 +12,7 @@ import Shell from 'gi://Shell';
 
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
+import {PACKAGE_VERSION} from 'resource:///org/gnome/shell/misc/config.js';
 
 log('NativeDock: extension.js top-level code executed');
 
@@ -48,6 +49,12 @@ class NativeDashWrapper {
         log(`[NFDM] NativeDashWrapper CONSTRUCTOR monitor=${monitorIndex}`);
         this._extension = extension;
         this._monitorIndex = monitorIndex;
+        // GNOME Shell version detection for compatibility
+        this._shellMajor = PACKAGE_VERSION
+            ? Number(PACKAGE_VERSION.split('.')[0])
+            : 48;
+        this._isGNOME50OrLater = this._shellMajor >= 50;
+        log(`[NFDM] GNOME Shell ${this._shellMajor} detected`);
         this._originalDash = null;
         this._originalDashParent = null;
         this._originalDashShow = null;
@@ -55,11 +62,13 @@ class NativeDashWrapper {
         this._originalDashRedisplay = null;
         this._originalDashQueueRedisplay = null;
         this._originalDashAdjustIconSize = null;
+        this._hadOriginalAdjustIconSize = false;
         this._hadOriginalFixSeparators = false;
         this._originalDashFixSeparators = null;
         this._patchedSeparators = new Map();
         this._sourceIds = new Set();
         this._repositionLaterId = 0;
+        this._initialSetupId = 0;
         this._retryId = 0;
         this._showAppsClickId = 0;
         this._lastConfig = null;
@@ -150,6 +159,7 @@ class NativeDashWrapper {
         this._originalDashAdjustIconSize = dash._adjustIconSize;
         this._hadOriginalFixSeparators = Object.prototype.hasOwnProperty.call(dash, '_fixSeparators');
         this._originalDashFixSeparators = dash._fixSeparators;
+        this._hadOriginalAdjustIconSize = Object.prototype.hasOwnProperty.call(dash, '_adjustIconSize');
 
         const _origRedisplay = this._originalDashRedisplay.bind(dash);
         const _origQueueRedisplay = this._originalDashQueueRedisplay.bind(dash);
@@ -180,17 +190,20 @@ class NativeDashWrapper {
                 dash._showAppsIcon.icon.setIconSize(size);
         };
 
-        // Intercept _adjustIconSize: let the original run for its side effects
-        // (ensure_style, theme spacing hints needed by vertical layout), then
-        // reapply our icon size and resize all icons so the native auto-sizing
-        // never overrides our configured size.
-        dash._adjustIconSize = () => {
-            _origAdjustIconSize();
-            const size = self._iconSize || DEFAULT_ICON_SIZE;
-            dash.iconSize = size;
-            _resizeDashIcons();
-            if (dash._box) dash._box.queue_relayout();
-        };
+        // Intercept _adjustIconSize (GNOME 49 and earlier):
+        // let the original run for its side effects (ensure_style, theme spacing
+        // hints needed by vertical layout), then reapply our icon size and resize
+        // all icons so the native auto-sizing never overrides our configured size.
+        // In GNOME 50+, _adjustIconSize may not exist; we rely on _redisplay wrapper.
+        if (this._hadOriginalAdjustIconSize) {
+            dash._adjustIconSize = () => {
+                _origAdjustIconSize();
+                const size = self._iconSize || DEFAULT_ICON_SIZE;
+                dash.iconSize = size;
+                _resizeDashIcons();
+                if (dash._box) dash._box.queue_relayout();
+            };
+        }
 
         dash._redisplay = () => {
             // Inject our icon size before icon creation so GNOME Shell's native
@@ -198,6 +211,12 @@ class NativeDashWrapper {
             // GNOME Shell reads `this.iconSize` (no underscore, default 64) at
             // line 527 of its dash.js: appIcon.icon.setIconSize(this.iconSize).
             dash.iconSize = self._iconSize || DEFAULT_ICON_SIZE;
+            // GNOME 50+ guard: skip _origRedisplay if the dash container is not
+            // in the stage tree yet, to prevent st_widget_get_theme_node warnings.
+            if (PACKAGE_VERSION && Number(PACKAGE_VERSION.split('.')[0]) >= 50 && !wrapper.actor.get_stage()) {
+                _resizeDashIcons();
+                return;
+            }
             _origRedisplay();
             // _adjustIconSize() is a noop (we replaced it above), but its
             // essential side effect — ensure_style() on the first icon — is
@@ -328,11 +347,25 @@ class NativeDashWrapper {
             trackFullscreen: true,
         });
 
-        // Initial redisplay at our icon size — must happen AFTER addChrome
-        // so all StWidget operations (ensure_style, theme lookups, icon
-        // creation) run while the dash is in the stage tree.
-        const size = self._iconSize || DEFAULT_ICON_SIZE;
-        dash._redisplay();
+        // Defer initial redisplay to idle so all StWidget theme node
+        // operations happen after the stage tree is fully settled.
+        // The first _poll() / reposition() call will wait until this runs.
+        this._initialSetupId = this._laterAdd(Meta.LaterType.IDLE, () => {
+            this._initialSetupId = 0;
+            const size = self._iconSize || DEFAULT_ICON_SIZE;
+            // GNOME 50 stage-guard: wrap _redisplay to prevent
+            // st_widget_get_theme_node when the container is not yet
+            // fully attached to the stage tree.
+            if (this.actor.get_stage()) {
+                dash._redisplay();
+            } else {
+                // Retry next frame if stage isn't ready.
+                return GLib.SOURCE_CONTINUE;
+            }
+            this._redisplayCalled = true;
+            this._scheduleReposition();
+            return GLib.SOURCE_REMOVE;
+        });
 
         // Show-apps button's built-in handler only toggles between
         // window-picker / app-grid within the overview. When the overview
@@ -451,13 +484,11 @@ class NativeDashWrapper {
         // the correct orientation when we read dimensions.
         this._applyOrientation(location);
 
-        // On first positioning, force _redisplay once to rebuild icons at the configured size.
-        // The captured native dash has default-sized icons; _redisplay applies our iconSize.
-        if (!this._redisplayCalled && typeof dash._redisplay === 'function') {
-            this._redisplayCalled = true;
-            dash._redisplay();
-            return false; // wait for layout to settle
-        }
+        // Wait for the deferred idle setup to complete before positioning.
+        // The first _redisplay() runs in an IDLE callback after addChrome,
+        // so all StWidget theme node operations happen with a valid stage.
+        if (!this._redisplayCalled)
+            return false;
 
         const allocW = dash.width;
         const allocH = dash.height;
@@ -565,9 +596,11 @@ class NativeDashWrapper {
             if (location === 3) {
                 x = monitor.x + Math.floor((monitor.width - targetW) / 2);
                 y = monitor.y + margin;
+                this._extension._log(`pos debug: TOP margin=${margin} dockH=${dockH} targetW=${targetW} y=${y} inStage=${inStage} iconSize=${iconSize}`);
             } else {
                 x = monitor.x + Math.floor((monitor.width - targetW) / 2);
                 y = monitor.y + monitor.height - dockH - margin;
+                this._extension._log(`pos debug: BOTTOM margin=${margin} dockH=${dockH} targetW=${targetW} y=${y} screenH=${monitor.height} inStage=${inStage} iconSize=${iconSize}`);
             }
         }
 
@@ -930,6 +963,10 @@ class NativeDashWrapper {
 
     destroy() {
         log(`[NFDM] NativeDashWrapper DESTROY monitor=${this._monitorIndex}`);
+        if (this._initialSetupId) {
+            this._laterRemove(this._initialSetupId);
+            this._initialSetupId = 0;
+        }
         this._cancelRetry();
         if (this._repositionLaterId) {
             this._laterRemove(this._repositionLaterId);
