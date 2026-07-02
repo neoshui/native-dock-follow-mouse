@@ -609,6 +609,7 @@ class NativeDashWrapper {
             if (location === 3) {
                 x = monitor.x + Math.floor((monitor.width - targetW) / 2);
                 y = monitor.y + margin;
+                console.log(`[NFDM-DEBUG] TOP: margin=${margin} y=${y} monitorY=${monitor.y}`);
             } else {
                 x = monitor.x + Math.floor((monitor.width - targetW) / 2);
                 y = monitor.y + monitor.height - dockH - margin;
@@ -634,6 +635,8 @@ class NativeDashWrapper {
         dash.visible = true;
         this._lastPositionedW = w;
         this._lastPositionedH = h;
+        this._lastPositionedX = dash.x;
+        this._lastPositionedY = dash.y;
 
         if (config.activeDotColor)
             this._applyDotColor(dash, config.activeDotColor);
@@ -1426,7 +1429,12 @@ export default class NativeDockFollowMouseExtension extends Extension {
                 const needsReposition = !dock._firstLayoutReady ||
                     dock.actor.width !== (dock._lastPositionedW || 0) ||
                     dock.actor.height !== (dock._lastPositionedH || 0);
-                if (needsReposition) {
+                // Also reposition if the dock's actual position drifted from
+                // the last known desired position (GNOME 50 may shift actors).
+                const posDrift = dock._lastPositionedX !== undefined &&
+                    (Math.abs(dock.actor.x - dock._lastPositionedX) > 5 ||
+                     Math.abs(dock.actor.y - dock._lastPositionedY) > 5);
+                if (needsReposition || posDrift) {
                     dock.reposition(this._configSnapshot());
                 }
             }
