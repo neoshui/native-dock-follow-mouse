@@ -3,7 +3,10 @@
 /* Neutralize GNOME 50 theme styling on our dock (#dash still matches name='dash') */
 .native-dock-follow-mouse-dock,
 .native-dock-follow-mouse-dock .dash-background,
-.native-dock-follow-mouse-dock .dash-item-container {
+.native-dock-follow-mouse-dock .dash-item-container,
+.native-dock-follow-mouse-dock .dash-item-container .show-apps,
+.native-dock-follow-mouse-dock .dash-item-container .overview-tile,
+.native-dock-follow-mouse-dock .dash-item-container .grid-search-result {
     padding: 0 !important;
     margin: 0 !important;
 }
