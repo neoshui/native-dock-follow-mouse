@@ -193,12 +193,21 @@ class NativeDashWrapper {
         };
 
         dash._redisplay = () => {
-            // Inject our icon size before icon creation so GNOME Shell's native
-            // _redisplay creates new icon actors at the configured size directly.
-            // GNOME Shell reads `this.iconSize` (no underscore, default 64) at
-            // line 527 of its dash.js: appIcon.icon.setIconSize(this.iconSize).
-            dash.iconSize = self._iconSize || DEFAULT_ICON_SIZE;
-            _origRedisplay();
+            // Reentrancy guard: compiz-alike-magic-lamp-effect calls
+            // Main.overview.dash._redisplay() from its getIcon() method
+            // during icon destruction, causing Clutter assertion failure.
+            if (wrapper._redisplayInProgress) {
+                _resizeDashIcons();
+                return;
+            }
+            wrapper._redisplayInProgress = true;
+            try {
+                // Inject our icon size before icon creation so GNOME Shell's native
+                // _redisplay creates new icon actors at the configured size directly.
+                // GNOME Shell reads `this.iconSize` (no underscore, default 64) at
+                // line 527 of its dash.js: appIcon.icon.setIconSize(this.iconSize).
+                dash.iconSize = self._iconSize || DEFAULT_ICON_SIZE;
+                _origRedisplay();
             // _adjustIconSize() is a noop (we replaced it above), but its
             // essential side effect — ensure_style() on the first icon — is
             // needed for correct theme spacing calculations.  Call it here
@@ -256,6 +265,9 @@ class NativeDashWrapper {
                     wrapper._scheduleReposition();
                 }
             }
+        } finally {
+            wrapper._redisplayInProgress = false;
+        }
         };
 
         dash._queueRedisplay = () => {
